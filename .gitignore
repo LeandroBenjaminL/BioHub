@@ -232,3 +232,4 @@ dist/
 .DS_Store
 Thumbs.db
 datasets/
+datasets
