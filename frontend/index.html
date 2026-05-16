@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BioHub</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;display:flex;min-height:100vh;background:#f0f4f8}
+.sidebar{width:250px;background:#0f1b2d;color:#e0e0e0;padding:1.5rem;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar h1{font-size:1.2rem;color:#4ade80;margin-bottom:1.5rem}
+.sidebar a{color:#b0b0b0;padding:0.5rem;border-radius:6px;display:block;font-size:0.9rem;cursor:pointer;text-decoration:none}
+.sidebar a:hover,.sidebar a.active{background:#1a2d45;color:#fff}
+.sidebar .info{margin-top:auto;padding:0.8rem;background:#1a2d45;border-radius:8px;font-size:0.75rem;line-height:1.5}
+.main{flex:1;padding:1.5rem;overflow-y:auto}
+.card{background:#fff;border-radius:10px;padding:1.2rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,0.06)}
+.card h3{font-size:1rem;margin-bottom:0.8rem;color:#1f2937}
+.card h4{font-size:0.9rem;margin-bottom:0.5rem;color:#4b5563}
+table{width:100%;border-collapse:collapse;font-size:0.82rem}
+th{background:#f0f4f8;padding:8px;border-bottom:2px solid #d1d5db;text-align:left;font-weight:600;white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid #e5e7eb}
+select,input,button{padding:7px 12px;border-radius:6px;border:1px solid #d1d5db;font-size:0.85rem;background:#fff}
+button{border:none;cursor:pointer;font-weight:500;color:#fff}
+button:hover{opacity:0.85}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:0.8rem}
+.flex{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:0.8rem}
+.bar{margin:3px 0;display:flex;align-items:center;font-size:0.78rem}
+.bar div:first-child{width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.bar .bg{height:16px;border-radius:3px;min-width:4px;margin:0 6px}
+.bar .val{color:#6b7280;font-size:0.72rem}
+.stat{padding:0.8rem;text-align:center}
+.stat .num{font-size:1.5rem;font-weight:700;color:#166534}
+.stat .lb{font-size:0.8rem;color:#6b7280}
+#map{height:400px;border-radius:10px;z-index:0}
+select[multiple]{height:80px;min-width:140px;font-size:0.78rem}
+.pag{display:flex;gap:4px;align-items:center;margin-top:8px;font-size:0.8rem}
+.pag button{padding:3px 10px;font-size:0.78rem;background:#374151}
+.err{color:#dc2626;font-size:0.82rem;margin:4px 0}
+.ok{color:#16a34a;font-size:0.82rem;margin:4px 0}
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:999}
+.modal-inner{background:#fff;border-radius:12px;padding:1.5rem;max-width:700px;width:90%;max-height:80vh;overflow-y:auto}
+audio{width:100%}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h1>🌿 BioHub</h1>
+  <nav>
+    <a href="#" onclick="navegar('inicio')" class="active">🏠 Inicio</a>
+    <a href="#" onclick="navegar('estado')">📊 Estado</a>
+    <a href="#" onclick="navegar('busqueda')">🔍 Búsqueda</a>
+    <a href="#" onclick="navegar('visualizacion')">📈 Visualización</a>
+    <a href="#" onclick="navegar('gestion')">✏️ Gestión</a>
+    <a href="#" onclick="navegar('datasets')">🗂️ Datasets</a>
+    <a href="#" onclick="navegar('ficha')">📍 Ficha</a>
+  </nav>
+  <div class="info" id="indicador">Iniciando...</div>
+</div>
+<div class="main" id="contenido"><div class="card"><p>Cargando...</p></div></div>
+
+<script>
+// ===== CONFIG =====
+const API = "http://localhost:8765/api";
+const DATASETS = ["IADIZA","iNaturalist","Xeno-canto"];
+
+// ===== UTILIDADES =====
+function $(id){return document.getElementById(id)}
+
+async function api(ruta, opts={}){
+  let res = await fetch(API+ruta, {
+    headers: {"Content-Type":"application/json"},
+    ...opts
+  });
+  let data = await res.json();
+  if(!res.ok) throw new Error(typeof data==="object"?JSON.stringify(data):data);
+  return data;
+}
+
+function graficoBarras(datos, colores){
+  if(!datos||!datos.etiquetas||!datos.valores) return "<p class=err>Sin datos</p>";
+  let max = Math.max(...datos.valores, 1);
+  return datos.etiquetas.map((l,i)=>{
+    let w = Math.max((datos.valores[i]/max)*60, 2);
+    let c = colores ? colores[i%colores.length] : "#166534";
+    return `<div class=bar><div>${l}</div><div class=bg style="background:${c};width:${w}%"></div><div class=val>${datos.valores[i]}</div></div>`;
+  }).join("");
+}
+
+// ===== NAVEGACIÓN =====
+function navegar(pag){
+  document.querySelectorAll(".sidebar a").forEach(a=>a.classList.remove("active"));
+  let idx = ["inicio","estado","busqueda","visualizacion","gestion","datasets","ficha"].indexOf(pag);
+  document.querySelectorAll(".sidebar a")[idx].classList.add("active");
+  renderizar(pag);
+  actualizarIndicador();
+}
+
+async function actualizarIndicador(){
+  try{
+    let d = await api("/datasets");
+    let totalMB = d.reduce((s, x) => s + (x.tamaño_mb || 0), 0);
+    let totalReg = d.reduce((s, x) => s + (x.procesado ? 1 : 0), 0);
+    $("indicador").innerHTML = `📦 ${d.length} datasets<br>💾 ${totalMB.toFixed(1)} MB total<br>📊 ${d[0]?.archivo||""} | ${d[1]?.archivo||""} | ${d[2]?.archivo||""}`;
+  }catch(e){$("indicador").innerHTML="🌿 BioHub"}
+}
+
+// ===== RENDER =====
+function renderizar(pag){
+  let c = $("contenido");
+  try{
+    if(pag==="inicio") c.innerHTML = pagInicio();
+    else if(pag==="estado") cargarEstado();
+    else if(pag==="busqueda"){c.innerHTML = pagBusqueda();setTimeout(cargarColumnas,100)}
+    else if(pag==="visualizacion") c.innerHTML = pagVisualizacion();
+    else if(pag==="gestion") c.innerHTML = pagGestion();
+    else if(pag==="datasets") cargarDatasets();
+    else if(pag==="ficha") c.innerHTML = pagFicha();
+  }catch(e){c.innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
+}
+
+// ============ PÁGINAS ============
+
+// ----- INICIO -----
+function pagInicio(){
+  return `<h1 style="color:#166534;margin-bottom:1rem">🌿 BioHub</h1>
+    <p style="margin-bottom:1.5rem;color:#4b5563">Análisis y visualización de datos de biodiversidad (Darwin Core)</p>
+    <div class=g4>
+      <div class=card><h3>📋 Propósito</h3><p style=font-size:0.85rem>Explorar, analizar y visualizar datos de biodiversidad de Argentina.</p></div>
+      <div class=card><h3>🌎 Darwin Core</h3><p style=font-size:0.85rem>Estándar internacional para datos de biodiversidad.</p></div>
+      <div class=card><h3>📊 3 Datasets</h3><p style=font-size:0.85rem>IADIZA, iNaturalist, Xeno-canto — 1.2M registros.</p></div>
+      <div class=card><h3>🗺️ Visualización</h3><p style=font-size:0.85rem>Mapas, gráficos y exploración detallada.</p></div>
+    </div>`;
+}
+
+// ----- ESTADO -----
+async function cargarEstado(){
+  let c = $("contenido");
+  c.innerHTML = `<h1 style="margin-bottom:1rem">📊 Estado del sistema</h1><div class=card id=est-log><h3>Log de operaciones</h3><p>Cargando...</p></div>`;
+  try{
+    let d = await api("/datasets");
+    let tabla = d.map(r=>`<tr><td>${r.nombre}</td><td>${r.archivo}</td><td>${r.tamaño_mb} MB</td><td>${r.procesado?"✅":"❌"}</td></tr>`).join("");
+    c.innerHTML = `<h1 style="margin-bottom:1rem">📊 Estado del sistema</h1>
+      <div class=card><h3>Datasets cargados</h3><table><tr><th>Nombre</th><th>Archivo</th><th>Tamaño</th><th>Procesado</th></tr>${tabla}</table></div>
+      <div class=card id=est-log><h3>Log de operaciones</h3><p id=est-log-cont>Cargando...</p></div>`;
+  }catch(e){c.innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
+  // Cargar log aparte (no crítico)
+  try{
+    let r = await fetch("/logs/operations.log");
+    let txt = await r.text();
+    let lines = txt.split("\n").filter(l=>l.trim());
+    let ins = lines.filter(l=>l.includes("INSERT")).length;
+    let upd = lines.filter(l=>l.includes("UPDATE")).length;
+    let del = lines.filter(l=>l.includes("DELETE")).length;
+    let err = lines.filter(l=>l.includes("ERROR")).length;
+    let e = $("est-log-cont");
+    if(e) e.innerHTML = `<div class=g4>${[["Total",lines.length],["INSERT",ins],["UPDATE",upd],["DELETE",del],["ERROR",err]].map(([l,v])=>`<div class=stat><div class=num>${v}</div><div class=lb>${l}</div></div>`).join("")}</div>
+      <div style=max-height:300px;overflow-y:auto;margin-top:8px><table><tr><th>Fecha</th><th>Dataset</th><th>Operación</th><th>Reg</th><th>Estado</th></tr>${lines.slice(-100).map(l=>{let p=l.split("|").map(x=>x.trim());return `<tr><td>${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${(p[4]||"").includes("ERROR")?"❌":"✅"}</td></tr>`}).join("")}</table></div>`;
+  }catch(e){let el=$("est-log-cont");if(el)el.innerHTML="<p>Sin log disponible</p>"}
+}
+
+// ----- BÚSQUEDA -----
+function pagBusqueda(){
+  return `<h1 style="margin-bottom:1rem">🔍 Búsqueda</h1>
+    <div class=card>
+      <div class=flex>
+        <select id=bs-ds>${DATASETS.map(d=>`<option>${d}</option>`).join("")}</select>
+        <select id=bs-col style=min-width:150px></select>
+        <input id=bs-txt placeholder="Texto a buscar..." style=flex:1>
+        <button onclick="ejecutarBusqueda()" style=background:#166534>🔍 Buscar</button>
+        <button id=bs-csv onclick="exportarCSV()" style="display:none;background:#1d4ed8">📥 CSV</button>
+      </div>
+      <div class=flex id=bs-filtros></div>
+    </div>
+    <div id=bs-res></div>
+    <div id=bs-sum></div>`;
+}
+
+async function cargarColumnas(){
+  let ds = $("bs-ds").value;
+  try{
+    // Usar endpoint liviano de columnas (solo 1 fila)
+    let info = await api("/datasets/"+ds+"/columnas");
+    $("bs-col").innerHTML = (info.columnas||[]).map(c=>`<option>${c}</option>`).join("");
+    $("bs-filtros").innerHTML = '<p style=font-size:0.78rem;color:#6b7280>Cargando filtros...</p>';
+    let html = "";
+    for(let [id,col,etq] of [["bs-cien","scientificName","Científico"],["bs-pais","countryCode","País"],["bs-prov","stateProvince","Provincia"]]){
+      try{
+        let r = await api("/datasets/"+ds+"/valores-unicos/"+col);
+        html += `<div><label style=font-size:0.75rem>${etq}</label><select id=${id} multiple style=width:145px>${(r.valores||[]).slice(0,80).map(v=>`<option value="${v.replace(/"/g,"&quot;")}">${v.slice(0,25)}</option>`).join("")}</select></div>`;
+      }catch(e){}
+    }
+    html += `<div><label style=font-size:0.75rem>Fechas</label><input type=date id=bs-fd style=display:block;margin:2px 0><input type=date id=bs-fh style=display:block></div>`;
+    html += `<div><label style=font-size:0.75rem>Observador</label><input id=bs-obs placeholder="Texto..." style=display:block></div>`;
+    $("bs-filtros").innerHTML = html;
+  }catch(e){}
+}
+
+async function ejecutarBusqueda(){
+  let ds = $("bs-ds").value, col = $("bs-col").value, txt = $("bs-txt").value;
+  let url = API+"/datasets/"+ds+"/buscar?columna="+encodeURIComponent(col)+"&texto="+encodeURIComponent(txt);
+  document.querySelectorAll("#bs-cien option:checked").forEach(o=>url+="&cientifico="+encodeURIComponent(o.value));
+  document.querySelectorAll("#bs-pais option:checked").forEach(o=>url+="&pais="+encodeURIComponent(o.value));
+  document.querySelectorAll("#bs-prov option:checked").forEach(o=>url+="&provincia="+encodeURIComponent(o.value));
+  if($("bs-obs")?.value) url+="&observador="+encodeURIComponent($("bs-obs").value);
+  if($("bs-fd")?.value) url+="&fecha_desde="+$("bs-fd").value;
+  if($("bs-fh")?.value) url+="&fecha_hasta="+$("bs-fh").value;
+  try{
+    let r = await (await fetch(url,{method:"POST"})).json();
+    if(!r.resultados||!r.resultados.length){$("bs-res").innerHTML='<div class=card>Sin resultados</div>';$("bs-csv").style.display="none";return}
+    window._exp = r.resultados;
+    let keys = r.columnas_relevantes||Object.keys(r.resultados[0]).slice(0,6);
+    let filas = r.resultados.slice(0,50).map(row=>`<tr>${keys.map(k=>`<td title="${(row[k]||"").toString().slice(0,200)}">${(row[k]||"").toString().slice(0,28)||"-"}</td>`).join("")}</tr>`).join("");
+    $("bs-res").innerHTML=`<div class=card><p><strong>${r.total} registros</strong> (mostrando ${Math.min(50,r.total)})</p><div style=overflow-x:auto;max-height:400px;overflow-y:auto><table><tr>${keys.map(k=>`<th>${k}</th>`).join("")}</tr>${filas}</table></div>`;
+    $("bs-csv").style.display="inline-block";
+    let s = await api("/datasets/"+ds+"/resumen?columna="+encodeURIComponent(col)+"&texto="+encodeURIComponent(txt));
+    $("bs-sum").innerHTML=`<div class=g4>${[["especies_unicas","Especies"],["paises","Países"],["provincias","Provincias"],["observadores","Observadores"]].map(([k,l])=>`<div class=stat><div class=num>${s[k]||0}</div><div class=lb>${l}</div></div>`).join("")}</div>`;
+  }catch(e){$("bs-res").innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
+}
+
+function exportarCSV(){
+  let data = window._exp; if(!data||!data.length) return;
+  let k = Object.keys(data[0]);
+  let csv = k.join(",")+"\n"+data.map(r=>k.map(c=>'"'+(r[c]||"").toString().replace(/"/g,'""')+'"').join(",")).join("\n");
+  let a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download = "biohub_"+new Date().toISOString().slice(0,10)+".csv";
+  a.click();
+}
+
+// ----- VISUALIZACIÓN -----
+function pagVisualizacion(){
+  return `<h1 style="margin-bottom:1rem">📈 Visualización</h1>
+    <div class=card>
+      <div class=flex>
+        <select id=vz-ds onchange="cargarViz()">${DATASETS.map(d=>`<option>${d}</option>`).join("")}</select>
+        <label>Top: <input id=vz-n type=number value=10 min=3 max=50 style=width:60px onchange="cargarViz()"></label>
+        <label>Nivel: <select id=vz-t onchange="cargarViz()"><option value=class>Clase</option><option value=order>Orden</option><option value=family>Familia</option></select></label>
+      </div>
+    </div>
+    <div class=g2 id=vz-graf></div>
+    <div class=card id=vz-comp></div>`;
+}
+
+async function cargarViz(){
+  let ds = $("vz-ds").value, n = $("vz-n").value, t = $("vz-t").value;
+  try{
+    let [pais, ano, tx, compl] = await Promise.all([
+      api("/datasets/"+ds+"/graficos/por-pais?top_n="+n),
+      api("/datasets/"+ds+"/graficos/por-ano"),
+      api("/datasets/"+ds+"/graficos/taxonomia?nivel="+t),
+      api("/datasets/"+ds+"/graficos/completitud"),
+    ]);
+    let colPais = ["#166534","#1d4ed8","#b45309","#7c3aed","#0891b2","#dc2626"];
+    let inclAno = ano.excluidas ? ` <span style=color:#dc2626;font-size:0.75rem>(${ano.excluidas} excluidos)</span>` : "";
+    $("vz-graf").innerHTML = `
+      <div class=card><h4>Registros por país</h4>${graficoBarras(pais, colPais)}<input type=range min=3 max=50 value=${n} onchange="$('vz-n').value=this.value;cargarViz()" style=width:100%></div>
+      <div class=card><h4>Registros por año${inclAno}</h4>${graficoBarras(ano, ["#1d4ed8"])||"<p>Sin datos de fecha</p>"}</div>
+      <div class=card><h4>Distribución (${t})</h4>${graficoBarras(tx, ["#b45309"])||"<p>Sin datos</p>"}</div>
+      <div class=card><h4>% No nulos por columna</h4>${graficoBarras(compl, compl.porcentajes?.map(v=>v>80?"#166534":v>50?"#b45309":"#dc2626"))||"<p>Sin datos</p>"}</div>`;
+    $("vz-comp").innerHTML = `<p style=font-size:0.82rem;color:#6b7280>Cargando comparativa...</p>`;
+    // Cargar comparativa aparte (no bloquea los graficos)
+    try{
+      let comp = await api("/datasets/comparativa");
+      $("vz-comp").innerHTML = `<h4>Comparativa entre datasets</h4><table><tr><th>Dataset</th><th>Registros</th><th>% Coord</th><th>% Fecha</th><th>% Compl</th></tr>${comp.map(r=>`<tr><td>${r.nombre}</td><td>${r.registros||"?"}</td><td>${r.coordenadas_validas_pct||0}%</td><td>${r.fecha_valida_pct||0}%</td><td>${r.campos_completados_pct||0}%</td></tr>`).join("")}</table>`;
+    }catch(e){$("vz-comp").innerHTML=`<p class=err>${e.message}</p>`}
+  }catch(e){$("vz-graf").innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
+}
+
+// ----- GESTIÓN -----
+function pagGestion(){
+  return `<h1 style="margin-bottom:1rem">✏️ Gestión</h1>
+    <div class=card>
+      <div class=flex>
+        <select id=gs-ds>${DATASETS.map(d=>`<option>${d}</option>`).join("")}</select>
+        <button onclick="formGestion('insert')" style=background:#166534>➕ Insertar</button>
+        <button onclick="formGestion('update')" style=background:#b45309>✏️ Actualizar</button>
+        <button onclick="formGestion('delete')" style=background:#dc2626>🗑️ Eliminar</button>
+      </div>
+      <div id=gs-form></div>
+    </div>`;
+}
+
+function formGestion(tipo){
+  let h = "";
+  if(tipo==="insert"){
+    h = `<div style=display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px>
+      ${["scientificName","decimalLatitude","decimalLongitude","eventDate","countryCode","stateProvince","coordinateUncertaintyInMeters","locality"].map(c=>`<div><label style=font-size:0.75rem;color:#555>${c}</label><input id=gi-${c} style=width:100%><div id=gie-${c} class=err></div></div>`).join("")}
+    </div><button onclick="ejecutarInsert()" style=margin-top:8px;background:#166534>💾 Insertar</button><div id=gi-msg></div>`;
+  } else if(tipo==="update"){
+    h = `<div class=flex style=margin-top:8px><input id=gu-id placeholder="ID del registro..." style=flex:1><button onclick="buscarRegistro()" style=background:#b45309>🔍 Buscar</button></div><div id=gu-form></div><div id=gu-msg></div>`;
+  } else {
+    h = `<div class=flex style=margin-top:8px><input id=gd-id placeholder="ID a eliminar..." style=flex:1><button onclick="eliminarID()" style=background:#dc2626>🗑️ Eliminar</button></div><div id=gd-msg></div>
+      <hr style=margin:12px 0><p style=font-size:0.85rem>Eliminar por columna + valores:</p>
+      <div class=flex style=margin-top:4px><input id=gd-col placeholder="Columna" style=width:140px><input id=gd-vals placeholder="Valores (ej: Río negro, Neuquén)" style=flex:1><button onclick="previewEliminar()" style=background:#b45309>👁️ Vista previa</button></div>
+      <div id=gd-prev></div>`;
+  }
+  $("gs-form").innerHTML = h;
+}
+
+async function ejecutarInsert(){
+  let ds=$("gs-ds").value,datos={};
+  document.querySelectorAll("[id^=gie-]").forEach(e=>e.textContent="");
+  ["scientificName","decimalLatitude","decimalLongitude","eventDate","countryCode","stateProvince","coordinateUncertaintyInMeters","locality"].forEach(c=>{let v=$("gi-"+c);if(v&&v.value)datos[c]=v.value});
+  try{
+    let r = await api("/datasets/"+ds+"/insertar",{method:"POST",body:JSON.stringify({datos})});
+    $("gi-msg").innerHTML=`<p class=ok>✅ ${r.mensaje}</p>`;
+  }catch(e){
+    try{let err=JSON.parse(e.message);(err.errores||[]).forEach(msg=>{let c=msg.split(" ")[0];let el=$("gie-"+(c[0].toLowerCase()+c.slice(1)));if(el)el.textContent=msg;else $("gi-msg").innerHTML+=`<p class=err>❌ ${msg}</p>`})}catch(e2){$("gi-msg").innerHTML=`<p class=err>❌ ${e.message}</p>`}
+  }
+}
+
+async function buscarRegistro(){
+  let ds=$("gs-ds").value,id=$("gu-id").value;
+  try{
+    let r = await api("/datasets/"+ds+"/registro/"+id);
+    let row = r.registro;
+    let keys = Object.keys(row).filter(k=>!["gbifID","id","occurrenceID","recordID"].includes(k)).slice(0,12);
+    $("gu-form").innerHTML = `<div style=display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px>${keys.map(k=>`<div><label style=font-size:0.75rem;color:#555>${k}</label><input id=gu-${k} value="${(row[k]??"").toString().replace(/"/g,"&quot;")}" style=width:100%></div>`).join("")}</div><button onclick='ejecutarUpdate("${id}")' style=margin-top:8px;background:#b45309>✏️ Guardar cambios</button>`;
+    $("gu-msg").innerHTML=`<p class=ok>✅ Registro encontrado</p>`;
+    window._guKeys = keys;
+  }catch(e){$("gu-msg").innerHTML=`<p class=err>❌ ${e.message}</p>`}
+}
+
+async function ejecutarUpdate(id){
+  let ds=$("gs-ds").value,cambios={};
+  (window._guKeys||[]).forEach(k=>{let v=$("gu-"+k);if(v&&v.value)cambios[k]=v.value});
+  try{
+    let r = await api("/datasets/"+ds+"/actualizar",{method:"PUT",body:JSON.stringify({id,cambios})});
+    let h = `<p class=ok>✅ ${r.mensaje} (${r.modificados} campo(s))</p>`;
+    if(r.resumen&&r.resumen.length) h += `<table style=margin-top:8px><tr><th>Campo</th><th>Anterior</th><th>Nuevo</th></tr>${r.resumen.map(c=>`<tr><td>${c.campo}</td><td style=color:#dc2626>${c.anterior}</td><td style=color:#16a34a>${c.nuevo}</td></tr>`).join("")}</table>`;
+    $("gu-msg").innerHTML = h;
+  }catch(e){$("gu-msg").innerHTML=`<p class=err>❌ ${e.message}</p>`}
+}
+
+async function eliminarID(){
+  let ds=$("gs-ds").value,id=$("gd-id").value;
+  try{
+    let r = await api("/datasets/"+ds+"/eliminar-por-id?id="+id,{method:"POST"});
+    $("gd-msg").innerHTML=`<p class=ok>✅ ${r.mensaje}</p>`;
+  }catch(e){$("gd-msg").innerHTML=`<p class=err>❌ ${e.message}</p>`}
+}
+
+async function previewEliminar(){
+  let ds=$("gs-ds").value,col=$("gd-col").value,v=$("gd-vals")?.value||"";
+  let valores = v.split(",").map(x=>x.trim()).filter(x=>x);
+  try{
+    let r = await api("/datasets/"+ds+"/eliminar/preview",{method:"POST",body:JSON.stringify({columna:col,valores})});
+    $("gd-prev").innerHTML = `<div style="margin:8px 0;padding:12px;background:#fef3c7;border-radius:6px;font-size:0.85rem">⚠️ Se eliminarán <strong>${r.total_afectados}</strong> de ${r.total_dataset} registros (${r.porcentaje}%)</div>
+      <button onclick="confirmarEliminar()" style=background:#dc2626>🗑️ Confirmar eliminación</button><div id=gd-res></div>`;
+    window._delBody = {columna:col,valores};
+  }catch(e){$("gd-prev").innerHTML=`<p class=err>${e.message}</p>`}
+}
+
+async function confirmarEliminar(){
+  let ds=$("gs-ds").value;
+  try{
+    let r = await api("/datasets/"+ds+"/eliminar",{method:"POST",body:JSON.stringify({...window._delBody,confirmado:true})});
+    $("gd-res").innerHTML=`<p class=ok>✅ ${r.mensaje}</p>`;
+  }catch(e){$("gd-res").innerHTML=`<p class=err>❌ ${e.message}</p>`}
+}
+
+// ----- DATASETS -----
+async function cargarDatasets(){
+  let c = $("contenido");
+  c.innerHTML = `<h1 style="margin-bottom:1rem">🗂️ Datasets</h1><div class=card id=ds-list><p>Cargando...</p></div><div class=card id=ds-comp></div>`;
+  try{
+    let [list, comp] = await Promise.all([api("/datasets"), api("/datasets/comparativa")]);
+    c.innerHTML = `<h1 style="margin-bottom:1rem">🗂️ Datasets</h1>
+      <div class=card><h3>Datasets disponibles</h3><table><tr><th>Nombre</th><th>Archivo</th><th>Tamaño</th><th>Modificado</th><th></th></tr>
+      ${list.map(r=>`<tr><td>${r.nombre}</td><td>${r.archivo}</td><td>${r.tamaño_mb} MB</td><td>${r.ultima_modificacion?new Date(r.ultima_modificacion*1000).toLocaleDateString():"-"}</td><td><button onclick="detalleDS('${r.nombre}')" style="background:#166534;font-size:0.78rem;padding:3px 10px;color:#fff">Ver</button></td></tr>`).join("")}</table></div>
+      <div class=g2><div class=card id=ds-det><h3>Seleccioná un dataset</h3></div><div class=card id=ds-doc><h3>Documentación</h3><p style=color:#6b7280>Seleccioná un dataset.</p></div></div>
+      <div class=card><h4>Tabla comparativa</h4><table><tr><th>Dataset</th><th>Registros</th><th>% Coord</th><th>% Fecha</th><th>% Compl</th></tr>${comp.map(r=>`<tr><td>${r.nombre}</td><td>${r.registros||"?"}</td><td>${r.coordenadas_validas_pct||0}%</td><td>${r.fecha_valida_pct||0}%</td><td>${r.campos_completados_pct||0}%</td></tr>`).join("")}</table></div>`;
+  }catch(e){c.innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
+}
+
+async function detalleDS(nombre){
+  try{
+    let d = await api("/datasets/"+nombre+"/resumen-columnas");
+    let cols = d.columnas||[];
+    $("ds-det").innerHTML = `<h3>${nombre}</h3><p style=font-size:0.85rem;margin-bottom:8px>Columnas: <strong>${cols.length}</strong> (muestra: ${d.registros_muestra} registros)</p>
+      <div style=display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px>${cols.map(c=>{let p=d.nulos_porcentaje?.[c]||0;return `<div style="padding:3px 5px;border-radius:4px;font-size:0.72rem;background:${p>50?"#fee2e2":p>20?"#fef3c7":"#f0fdf4"};border:1px solid #e5e7eb"><div style=font-weight:600;overflow:hidden;text-overflow:ellipsis>${c}</div><div style=color:${p>50?"#dc2626":p>20?"#b45309":"#16a34a"}>${p}% nulos</div></div>`}).join("")}</div>`;
+    try{
+      let docs = await api("/datasets/"+nombre+"/docs");
+      if(docs.documentos&&docs.documentos.length){
+        $("ds-doc").innerHTML = `<h3>Documentación</h3><select id=ds-sel onchange="verDoc()">${docs.documentos.map((d,i)=>`<option value=${i}>${d.nombre}</option>`).join("")}</select><div id=ds-md style=margin-top:8px;font-size:0.82rem>${docs.documentos[0].contenido.split("\n").slice(0,40).map(l=>l.trim()?`<p style=margin:2px 0>${l.replace(/^###?\s+/,"<b>").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</p>`:"<br>").join("")||""}</div>`;
+        window._docs = docs.documentos;
+      }
+    }catch(e){}
+  }catch(e){$("ds-det").innerHTML=`<p class=err>${e.message}</p>`}
+}
+
+function verDoc(){
+  let i = parseInt($("ds-sel")?.value);
+  let d = window._docs; if(!d||!d[i]) return;
+  $("ds-md").innerHTML = d[i].contenido.split("\n").slice(0,50).map(l=>l.trim()?`<p style=margin:3px 0>${l.replace(/^###?\s+/,"<b>").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</p>`:"<br>").join("");
+}
+
+// ----- FICHA -----
+function pagFicha(){
+  return `<h1 style="margin-bottom:1rem">📍 Ficha de datos</h1>
+    <div class=card>
+      <div class=flex>
+        <select id=fc-ds onchange="cargarMapa()">${DATASETS.map(d=>`<option>${d}</option>`).join("")}</select>
+        <span>Color:</span><select id=fc-c onchange="cargarMapa()"><option value=countryCode>País</option><option value=scientificName>Especie</option><option value=institutionCode>Institución</option></select>
+        <span id=fc-info style=font-size:0.82rem;color:#6b7280>Seleccioná un dataset</span>
+      </div>
+    </div>
+    <div id=map></div>
+    <div class=g2><div class=card id=fc-tax><h3>📋 Ficha taxonómica</h3><p style=color:#6b7280>Hacé clic en un punto del mapa</p></div><div class=card id=fc-mul><h3>🖼️ Multimedia</h3><p style=color:#6b7280>Hacé clic en un punto del mapa</p></div></div>`;
+}
+
+async function cargarMapa(){
+  let ds = $("fc-ds").value;
+  $("fc-info").textContent = "Cargando...";
+  try{
+    let d = await api("/datasets/"+ds+"/mapa");
+    $("fc-info").textContent = `${d.puntos.length} puntos en mapa | ${d.excluidas} excluidos`;
+    if(window._map){window._map.remove()}
+    window._map = L.map("map").setView([-34.6,-58.4], 4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OSM"}).addTo(window._map);
+    let cols = ["#166534","#1d4ed8","#b45309","#dc2626","#7c3aed","#0891b2","#be185d","#65a30d"], cm={}, ci=0, cb=$("fc-c").value;
+    (d.puntos||[]).forEach(p=>{
+      let lat=parseFloat(p.decimalLatitude), lng=parseFloat(p.decimalLongitude);
+      if(isNaN(lat)||isNaN(lng)) return;
+      let k = p[cb]||"?"; if(!cm[k]) cm[k]=cols[ci++%cols.length];
+      let m = L.circleMarker([lat,lng],{radius:4,fillColor:cm[k],color:"#333",weight:1,fillOpacity:0.7});
+      m.bindPopup(`<b>${p.scientificName||"N/A"}</b><br>${p.countryCode||""} ${p.stateProvince||""}<br>${p.eventDate||""}`);
+      m.on("click",()=>mostrarFicha(p));
+      m.addTo(window._map);
+    });
+  }catch(e){$("fc-info").textContent="Error: "+e.message}
+}
+
+function mostrarFicha(p){
+  if(!p) return;
+  let rows = Object.entries(p).filter(([k])=>!["decimalLatitude","decimalLongitude"].includes(k)).slice(0,12);
+  $("fc-tax").innerHTML = `<h3>📋 Ficha taxonómica</h3><table>${rows.map(([k,v])=>`<tr><td style=font-weight:600;padding:3px 6px;color:#555;border:none;font-size:0.82rem>${k}</td><td style=padding:3px 6px;border:none;font-size:0.82rem>${v||"-"}</td></tr>`).join("")}</table>`;
+  let sonido = (p.occurrenceID||"").startsWith("X")||(p.institutionCode||"").toLowerCase().includes("xeno");
+  let foto = (p.institutionCode||"").toLowerCase().includes("inatur")||p.datasetName==="iNaturalist";
+  $("fc-mul").innerHTML = `<h3>🖼️ Multimedia</h3>${sonido?`<p style=font-size:0.85rem>🔊 Audio Xeno-Canto:</p><audio controls><source src="https://www.xeno-canto.org/${(p.occurrenceID||"").replace(/\D/g,"")}/download" type="audio/mpeg"></audio>`:foto?`<p style=font-size:0.85rem>📷 iNaturalist — foto disponible</p>`:'<p style=color:#6b7280>Sin datos multimedia</p>'}`;
+}
+
+// ===== EVENTO GLOBAL: cargar columnas al cambiar dataset en búsqueda =====
+document.addEventListener("change", function(e){
+  if(e.target.id==="bs-ds") cargarColumnas();
+});
+
+// ===== INIT =====
+navegar("inicio");
+</script>
+</body>
+</html>
