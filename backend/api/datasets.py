@@ -22,6 +22,9 @@ def _n(v):
     if isinstance(v, (np.floating,)):
         return None if np.isnan(v) else float(v)
     if isinstance(v, pd.Timestamp): return str(v)
+    if isinstance(v, float):
+        import math
+        return None if math.isnan(v) else v
     return v
 
 def cargar_dataset(nombre: str) -> pd.DataFrame:

@@ -108,9 +108,9 @@ def completitud(nombre: str):
     try:
         df = cargar_dataset(nombre)
     except Exception:
-        return {"columnas": [], "porcentajes": []}
+        return {"etiquetas": [], "valores": []}
     pct = df.notna().mean().mul(100).sort_values(ascending=False).round(2)
-    return {"columnas": [_n(k) for k in pct.index], "porcentajes": [_n(v) for v in pct.values]}
+    return {"etiquetas": [_n(k) for k in pct.index], "valores": [_n(v) for v in pct.values]}
 
 @router.get("/datasets/comparativa")
 def comparativa():

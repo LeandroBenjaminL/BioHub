@@ -63,7 +63,7 @@ audio{width:100%}
 
 <script>
 // ===== CONFIG =====
-const API = "http://localhost:8765/api";
+const API = "http://localhost:8001/api";
 const DATASETS = ["IADIZA","iNaturalist","Xeno-canto"];
 
 // ===== UTILIDADES =====
@@ -146,18 +146,14 @@ async function cargarEstado(){
       <div class=card><h3>Datasets cargados</h3><table><tr><th>Nombre</th><th>Archivo</th><th>Tamaño</th><th>Procesado</th></tr>${tabla}</table></div>
       <div class=card id=est-log><h3>Log de operaciones</h3><p id=est-log-cont>Cargando...</p></div>`;
   }catch(e){c.innerHTML=`<div class=card><p class=err>${e.message}</p></div>`}
-  // Cargar log aparte (no crítico)
+  // Cargar log desde API
   try{
-    let r = await fetch("/logs/operations.log");
-    let txt = await r.text();
-    let lines = txt.split("\n").filter(l=>l.trim());
-    let ins = lines.filter(l=>l.includes("INSERT")).length;
-    let upd = lines.filter(l=>l.includes("UPDATE")).length;
-    let del = lines.filter(l=>l.includes("DELETE")).length;
-    let err = lines.filter(l=>l.includes("ERROR")).length;
+    let r = await api("/logs");
+    let lines = r.lineas||[];
+    let s = r.resumen||{};
     let e = $("est-log-cont");
-    if(e) e.innerHTML = `<div class=g4>${[["Total",lines.length],["INSERT",ins],["UPDATE",upd],["DELETE",del],["ERROR",err]].map(([l,v])=>`<div class=stat><div class=num>${v}</div><div class=lb>${l}</div></div>`).join("")}</div>
-      <div style=max-height:300px;overflow-y:auto;margin-top:8px><table><tr><th>Fecha</th><th>Dataset</th><th>Operación</th><th>Reg</th><th>Estado</th></tr>${lines.slice(-100).map(l=>{let p=l.split("|").map(x=>x.trim());return `<tr><td>${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${(p[4]||"").includes("ERROR")?"❌":"✅"}</td></tr>`}).join("")}</table></div>`;
+    if(e) e.innerHTML = `<div class=g4>${[["Total",r.total||0],["INSERT",s.INSERT||0],["UPDATE",s.UPDATE||0],["DELETE",s.DELETE||0],["ERROR",s.ERROR||0]].map(([l,v])=>`<div class=stat><div class=num>${v}</div><div class=lb>${l}</div></div>`).join("")}</div>
+      <div style=max-height:300px;overflow-y:auto;margin-top:8px><table><tr><th>Fecha</th><th>Dataset</th><th>Operación</th><th>Reg</th><th>Estado</th></tr>${lines.slice(-100).map(l=>{let p=(""+l).split("|").map(x=>x.trim());return `<tr><td>${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${(p[4]||"").includes("ERROR")?"❌":"✅"}</td></tr>`}).join("")}</table></div>`;
   }catch(e){let el=$("est-log-cont");if(el)el.innerHTML="<p>Sin log disponible</p>"}
 }
 
